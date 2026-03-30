@@ -2,7 +2,7 @@
 require('dotenv').config();
 
 const { App } = require('@slack/bolt');
-const Anthropic = require('@anthropic-ai/sdk');
+const Groq = require('groq-sdk');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -17,7 +17,7 @@ const {
   SLACK_BOT_TOKEN,
   SLACK_SIGNING_SECRET,
   SLACK_APP_TOKEN,
-  ANTHROPIC_API_KEY,
+  GROQ_API_KEY,
   ALLOWED_CHANNEL_IDS = '',
   ALLOWED_SAVER_IDS = '',
   PORT = '3000',
@@ -34,6 +34,7 @@ const allowedSavers = ALLOWED_SAVER_IDS
 // ── Startup initialization ───────────────────────────────────────────────────
 
 ensureLearningsFile();
+console.log(`[app] Allowed savers: ${allowedSavers.length ? allowedSavers.join(', ') : 'NONE — save commands disabled'}`);
 
 const knowledgePath = path.join(__dirname, '..', 'data', 'knowledge.md');
 const knowledgeText = fs.readFileSync(knowledgePath, 'utf8');
@@ -48,12 +49,18 @@ const slackApp = new App({
   appToken: SLACK_APP_TOKEN,
 });
 
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const LEARNING_KEYWORDS = ['save this', 'store this', 'remember this', 'learn this', 'note this', 'add this'];
-const KNOWLEDGE_KEYWORDS = ['knowledge:', 'add to knowledge', 'knowledge base:'];
+const LEARNING_KEYWORDS = [
+  'save this:', 'save this -', 'save this ',
+  'store this:', 'store this -', 'store this ',
+  'remember this:', 'remember this -', 'remember this ',
+  'learn this:', 'note this:', 'add this:',
+  'save:', 'remember:', 'store:',
+];
+const KNOWLEDGE_KEYWORDS = ['knowledge:', 'add to knowledge:', 'knowledge base:'];
 
 function isChannelAllowed(channelId) {
   if (channelId.startsWith('D')) return true;        // Direct message
@@ -83,20 +90,64 @@ function extractContent(text, keywords) {
 }
 
 /**
+ * Fetch full thread and format it as a readable conversation string.
+ */
+async function fetchThreadAsText(client, channel, threadTs, botUserId) {
+  try {
+    const result = await client.conversations.replies({
+      channel,
+      ts: threadTs,
+      limit: 50,
+    });
+
+    const lines = (result.messages || []).map(m => {
+      const who = m.bot_id ? 'AnimeshAI' : 'Animesh';
+      const text = (m.text || '').replace(new RegExp(`<@${botUserId}>`, 'g'), '@AnimeshAI').trim();
+      return `[${who}]: ${text}`;
+    });
+
+    return lines.join('\n');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Handle save commands. Returns true if the message was a save command.
  */
-async function handleSaveCommand(text, userId, client, channel, ts) {
-  if (!isSaver(userId)) return false;
-
+async function handleSaveCommand(text, userId, client, channel, ts, threadTs, botUserId) {
   const lower = text.toLowerCase();
+  const isSaveAttempt =
+    LEARNING_KEYWORDS.some(kw => lower.includes(kw)) ||
+    KNOWLEDGE_KEYWORDS.some(kw => lower.includes(kw));
+
+  // Non-saver trying a save command — silently drop, no response
+  if (isSaveAttempt && !isSaver(userId)) return true;
+
+  // Not a save command at all
+  if (!isSaveAttempt) return false;
+  const isInThread = threadTs && threadTs !== ts;
 
   if (LEARNING_KEYWORDS.some(kw => lower.includes(kw))) {
-    const content = extractContent(text, LEARNING_KEYWORDS);
-    appendLearning(content);
+    const note = extractContent(text, LEARNING_KEYWORDS);
+
+    let toSave = note;
+
+    // If in a thread, fetch and prepend the full thread context
+    if (isInThread) {
+      const threadText = await fetchThreadAsText(client, channel, threadTs, botUserId);
+      if (threadText) {
+        toSave = `[Thread context]\n${threadText}${note ? `\n\n[Note]: ${note}` : ''}`;
+      }
+    }
+
+    appendLearning(toSave);
     await client.chat.postMessage({
       channel,
       thread_ts: ts,
-      text: '✅ Saved to learnings. I\'ll use this immediately in future queries.',
+      text: isInThread
+        ? '✅ Saved full thread context to learnings.'
+        : '✅ Saved to learnings.',
     });
     return true;
   }
@@ -146,7 +197,7 @@ async function handleAIResponse({ text, userId, channel, ts, threadTs, client, b
   const cleanText = stripMention(text, botUserId);
 
   // Check save commands first
-  const wasSave = await handleSaveCommand(cleanText, userId, client, channel, ts);
+  const wasSave = await handleSaveCommand(cleanText, userId, client, channel, ts, threadTs, botUserId);
   if (wasSave) return;
 
   // Silently skip if nothing to respond to
@@ -167,14 +218,16 @@ async function handleAIResponse({ text, userId, channel, ts, threadTs, client, b
   ];
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
       max_tokens: 1024,
-      system: systemPrompt,
-      messages,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ],
     });
 
-    const replyText = response.content[0]?.text || '(no response)';
+    const replyText = response.choices[0]?.message?.content || '(no response)';
 
     await client.chat.postMessage({
       channel,

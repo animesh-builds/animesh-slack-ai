@@ -1,46 +1,102 @@
-# Background
+# Payments — Checkout & Payment Flow
 
-Animesh Giradkar is a Product Manager in fintech with experience across payments, credit, and financial infrastructure products. He has worked on building and scaling digital financial products for consumers and businesses.
+Ecommerce checkout supports multiple payment methods: UPI, cards (credit/debit), net banking, wallets (Paytm, PhonePe etc.), BNPL (Buy Now Pay Later), and COD (Cash on Delivery).
 
-# Current Focus
+Payment orchestration layers (e.g. Juspay) sit between the merchant and multiple payment gateways (Razorpay, PayU, etc.) to route, retry, and optimise success rates.
 
-Animesh works on products related to digital payments and credit infrastructure. His work involves defining product strategy, working with engineering teams on technical requirements, and driving cross-functional alignment across design, compliance, data, and business stakeholders.
+Key checkout concerns:
+- Payment success rate (PSR) — primary north star metric
+- Drop-off at payment step
+- Retry flows for failed payments
+- UPI intent vs collect flow differences
+- Card tokenisation (RBI mandate compliance)
 
-# Product Philosophy
+# Payments — Failure Handling & Refunds
 
-Animesh believes in:
-- Starting with user problems before jumping to solutions
-- Data-informed (not data-driven) decision making — intuition and qualitative signals matter
-- Building for trust in financial products, especially around transparency and error handling
-- Iterating fast in discovery, moving deliberately in delivery
-- Clear writing as a product skill — specs, narratives, and comms should be unambiguous
+Common failure reasons: bank decline, insufficient funds, timeout, gateway error, network drop.
 
-# Payments Domain Knowledge
+Retry logic: show contextual error, suggest alternate payment method, allow retry on same method.
 
-Key concepts Animesh works with: payment rails (ACH, RTP, UPI, card networks), settlement timing, payment failure handling, reconciliation, dispute management, KYC/KYB, and fraud risk.
+Auto-refund SLA for failed-but-charged scenarios is a critical compliance and trust requirement.
 
-MDR (Merchant Discount Rate) — the fee charged to merchants for accepting card payments. Varies by card type, merchant category, and acquirer.
+Refund flows back to original payment method. Key metrics: refund initiation TAT, refund success rate, refund to source vs wallet credit.
 
-Settlement timing varies by rail: UPI/IMPS are near-real-time, NEFT is batch, card settlements typically T+1 for most merchants.
+RBI mandates: card refunds within 5-7 business days, UPI refunds within 24-48 hours typically.
 
-# Credit Domain Knowledge
+# Payments — Reconciliation
 
-Familiarity with credit decisioning, underwriting models, bureau data, credit line management, and regulatory requirements (RBI guidelines for digital lending in India context).
+Daily reconciliation between:
+- Orders placed on platform
+- Payments captured at gateway
+- Settlements received from gateway
+- Payouts made to sellers/brands
 
-# Compliance and Risk
+Reconciliation breaks (mismatches) are a major ops pain point — tracked and resolved by finance ops.
 
-Products in fintech must navigate: AML/KYC compliance, RBI regulatory reporting, data localisation requirements, and audit trails for financial transactions.
+# Payments — MDR and Costs
 
-# Ways of Working
+MDR (Merchant Discount Rate) — fee charged for accepting card payments. Varies by card type:
+- Debit card: lower MDR
+- Credit card: higher MDR (~1.5-2%)
+- UPI: 0% MDR for P2M (NPCI mandate)
 
-Animesh prefers:
-- Async communication with written context over synchronous interruptions
-- Decisions documented in product specs or decision logs
-- Metrics tied to user outcomes, not vanity metrics
-- Weekly rituals: brief written status updates, prioritization reviews
+# Payments — Fraud and Risk
 
-# Tools and Stack Familiarity
+Velocity checks, device fingerprinting, address verification. COD abuse (false returns, fake orders) is a specific ecommerce fraud vector. RTO (Return to Origin) rate is a key metric tied to fraud and order quality.
 
-Product tools: Jira, Confluence, Figma, Amplitude, Mixpanel, Notion, Linear, Slack.
-Analytics: SQL, Looker, Metabase.
-Engineering familiarity: REST APIs, webhooks, event-driven architecture, basic cloud infrastructure concepts.
+# Billing & Subscriptions — SaaS Model
+
+SaaS platform billing charges merchants on a subscription model. Plans vary by:
+- Number of products/SKUs
+- Number of sales channels
+- Feature access
+- GMV-based tiers in some cases
+
+# Billing — Subscription Lifecycle
+
+Key states: Trial → Active → Past Due → Suspended → Cancelled
+
+- Trial: free period for new merchants, typically 14-30 days
+- Past Due: payment failed, grace period before suspension
+- Suspended: access restricted, reactivate by paying
+- Cancellation: data retention policies apply
+
+# Billing — Invoicing and Proration
+
+Monthly/annual billing cycles. Invoice generation, tax (GST) calculation, payment collection via auto-debit or manual payment link.
+
+Key pain points: invoice disputes, GST credit note handling, failed auto-debit retries.
+
+Proration logic (upgrades mid-cycle, downgrades) is complex — common source of billing bugs and merchant complaints.
+
+Upgrades: typically immediate + prorated charge for remainder of cycle.
+Downgrades: typically applied at end of current billing cycle.
+
+# Billing — Dunning
+
+Process to recover failed subscription payments:
+- Retry schedule: Day 0 → Day 3 → Day 7 → suspension
+- Communication: email + in-app notifications at each retry
+- Key metric: involuntary churn — churn caused by payment failure, not intent to cancel
+
+# PM Frameworks
+
+## North Star and Metrics
+- PSR (Payment Success Rate) for payments
+- Refund TAT, recon break rate for payment ops
+- MRR, involuntary churn, trial-to-paid conversion for subscriptions
+- Invoice dispute rate for billing health
+
+## Product Philosophy
+- Start with user/merchant problems before jumping to solutions
+- Data-informed (not data-driven) — qualitative signals matter
+- Build for trust in financial products — transparency and error handling are non-negotiable
+- Ship small, learn fast in checkout; move deliberately in billing (mistakes are hard to reverse)
+- Written specs before building — decisions documented, not verbal
+
+# Tools Reference
+
+Product: Jira, Confluence, Figma, Notion, Linear, Slack
+Analytics: SQL, Mixpanel, Amplitude, Looker, Metabase
+Payments: Razorpay dashboard, Juspay dashboard, reconciliation sheets
+Engineering: REST APIs, webhooks (payment callbacks), event-driven architecture
