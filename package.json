@@ -1,11 +1,12 @@
 {
   "name": "animesh-slack-ai",
   "version": "1.0.0",
-  "description": "Animesh's personal Slack AI assistant powered by Claude",
+  "description": "AnimeshAI — a self-hosted personal Slack assistant with domain knowledge, persistent memory, and RAG",
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
-    "dev": "node --watch src/app.js"
+    "dev": "node --watch src/app.js",
+    "index-repos": "node scripts/index-repos.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -48,17 +48,25 @@ function parseSections(markdownText) {
 }
 
 /**
- * Build TF-IDF index from knowledge.md text. Called once at startup.
+ * Build TF-IDF index from one or more markdown texts.
+ * Called once at startup. Pass multiple strings to merge
+ * public knowledge.md + private-knowledge.md into one index.
  */
-function buildIndex(markdownText) {
+function buildIndex(...markdownTexts) {
   tfidf = new natural.TfIdf();
-  sections = parseSections(markdownText);
+  sections = [];
+
+  for (const text of markdownTexts) {
+    if (!text || !text.trim()) continue;
+    const parsed = parseSections(text);
+    sections.push(...parsed);
+  }
 
   for (const section of sections) {
     tfidf.addDocument(section.heading + ' ' + section.body);
   }
 
-  console.log(`[embeddings] Indexed ${sections.length} sections from knowledge.md`);
+  console.log(`[embeddings] Indexed ${sections.length} sections total`);
 }
 
 /**

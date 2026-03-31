@@ -2,3 +2,14 @@ node_modules/
 .env
 *.log
 .DS_Store
+
+# Private knowledge — generated from local private repos, never commit
+data/private-knowledge.md
+data/learnings.md
+
+# Company-specific knowledge and persona — customize locally, never commit
+data/knowledge.md
+data/system-prompt.md
+
+# Private repo config — contains local absolute paths, never commit
+scripts/repos.config.json

@@ -18,6 +18,8 @@ const {
   SLACK_SIGNING_SECRET,
   SLACK_APP_TOKEN,
   GROQ_API_KEY,
+  BOT_NAME = 'AnimeshAI',
+  AUTHOR_NAME = 'Animesh',
   ALLOWED_CHANNEL_IDS = '',
   ALLOWED_SAVER_IDS = '',
   PORT = '3000',
@@ -37,8 +39,32 @@ ensureLearningsFile();
 console.log(`[app] Allowed savers: ${allowedSavers.length ? allowedSavers.join(', ') : 'NONE — save commands disabled'}`);
 
 const knowledgePath = path.join(__dirname, '..', 'data', 'knowledge.md');
-const knowledgeText = fs.readFileSync(knowledgePath, 'utf8');
-buildIndex(knowledgeText);
+const knowledgeExamplePath = path.join(__dirname, '..', 'data', 'knowledge.example.md');
+const activeKnowledgePath = fs.existsSync(knowledgePath) ? knowledgePath : knowledgeExamplePath;
+if (!fs.existsSync(knowledgePath)) {
+  console.log('[app] knowledge.md not found — using knowledge.example.md. Copy and customize it: cp data/knowledge.example.md data/knowledge.md');
+}
+const knowledgeText = fs.readFileSync(activeKnowledgePath, 'utf8');
+
+const systemPromptPath = path.join(__dirname, '..', 'data', 'system-prompt.md');
+const systemPromptExamplePath = path.join(__dirname, '..', 'data', 'system-prompt.example.md');
+const activeSystemPromptPath = fs.existsSync(systemPromptPath) ? systemPromptPath : systemPromptExamplePath;
+if (!fs.existsSync(systemPromptPath)) {
+  console.log('[app] system-prompt.md not found — using system-prompt.example.md. Copy and customize it: cp data/system-prompt.example.md data/system-prompt.md');
+}
+
+const privateKnowledgePath = path.join(__dirname, '..', 'data', 'private-knowledge.md');
+const privateKnowledgeText = fs.existsSync(privateKnowledgePath)
+  ? fs.readFileSync(privateKnowledgePath, 'utf8')
+  : '';
+
+if (privateKnowledgeText) {
+  console.log('[app] Private knowledge file found — loading alongside public knowledge');
+} else {
+  console.log('[app] No private-knowledge.md found — run "npm run index-repos" to generate one');
+}
+
+buildIndex(knowledgeText, privateKnowledgeText);
 
 // ── Clients ──────────────────────────────────────────────────────────────────
 
@@ -101,8 +127,8 @@ async function fetchThreadAsText(client, channel, threadTs, botUserId) {
     });
 
     const lines = (result.messages || []).map(m => {
-      const who = m.bot_id ? 'AnimeshAI' : 'Animesh';
-      const text = (m.text || '').replace(new RegExp(`<@${botUserId}>`, 'g'), '@AnimeshAI').trim();
+      const who = m.bot_id ? BOT_NAME : AUTHOR_NAME;
+      const text = (m.text || '').replace(new RegExp(`<@${botUserId}>`, 'g'), `@${BOT_NAME}`).trim();
       return `[${who}]: ${text}`;
     });
 
@@ -299,7 +325,7 @@ httpApp.get('/', (req, res) => {
 
 (async () => {
   await slackApp.start();
-  console.log('[slack] AnimeshAI bot is running in Socket Mode ⚡');
+  console.log(`[slack] ${BOT_NAME} bot is running in Socket Mode ⚡`);
 
   httpApp.listen(parseInt(PORT, 10), () => {
     console.log(`[http] Health check server on port ${PORT}`);

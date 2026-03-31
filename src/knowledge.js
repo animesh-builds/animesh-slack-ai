@@ -5,12 +5,16 @@ const { getTopChunks } = require('./embeddings');
 const { getRecentLearnings } = require('./learnings');
 
 const SYSTEM_PROMPT_PATH = path.join(__dirname, '..', 'data', 'system-prompt.md');
+const SYSTEM_PROMPT_EXAMPLE_PATH = path.join(__dirname, '..', 'data', 'system-prompt.example.md');
+const ACTIVE_SYSTEM_PROMPT_PATH = fs.existsSync(SYSTEM_PROMPT_PATH)
+  ? SYSTEM_PROMPT_PATH
+  : SYSTEM_PROMPT_EXAMPLE_PATH;
 
 let cachedSystemPromptBase = null;
 
 function getSystemPromptBase() {
   if (!cachedSystemPromptBase) {
-    cachedSystemPromptBase = fs.readFileSync(SYSTEM_PROMPT_PATH, 'utf8').trim();
+    cachedSystemPromptBase = fs.readFileSync(ACTIVE_SYSTEM_PROMPT_PATH, 'utf8').trim();
   }
   return cachedSystemPromptBase;
 }

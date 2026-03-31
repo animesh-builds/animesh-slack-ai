@@ -1,0 +1,32 @@
+{
+  "repos": [
+    {
+      "name": "Payment Service",
+      "path": "/absolute/path/to/your/payment-service",
+      "include": {
+        "docs": true,
+        "source": true,
+        "schemas": true,
+        "gitLog": true
+      },
+      "sourceExtensions": [".js", ".ts", ".py", ".go", ".java"],
+      "maxFileSizeKB": 100,
+      "maxFilesPerRepo": 50,
+      "ignorePaths": ["node_modules", "dist", ".git", "build", "coverage", "__pycache__", ".next"]
+    },
+    {
+      "name": "Billing Service",
+      "path": "/absolute/path/to/your/billing-service",
+      "include": {
+        "docs": true,
+        "source": true,
+        "schemas": true,
+        "gitLog": true
+      },
+      "sourceExtensions": [".js", ".ts", ".py", ".go"],
+      "maxFileSizeKB": 100,
+      "maxFilesPerRepo": 50,
+      "ignorePaths": ["node_modules", "dist", ".git", "build", "coverage"]
+    }
+  ]
+}
