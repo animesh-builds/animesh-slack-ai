@@ -10,6 +10,7 @@ const path = require('path');
 const { buildIndex } = require('./embeddings');
 const { buildSystemPrompt } = require('./knowledge');
 const { ensureLearningsFile, appendLearning, appendToKnowledge } = require('./learnings');
+const { addToQueue, getPending, markDone, clearDone } = require('./queue');
 
 // ── Environment ──────────────────────────────────────────────────────────────
 
@@ -20,8 +21,10 @@ const {
   GROQ_API_KEY,
   BOT_NAME = 'AnimeshAI',
   AUTHOR_NAME = 'Animesh',
+  AUTHOR_SLACK_USER_ID = '',
   ALLOWED_CHANNEL_IDS = '',
   ALLOWED_SAVER_IDS = '',
+  ALLOWED_RESPONDER_IDS = '',
   PORT = '3000',
 } = process.env;
 
@@ -31,6 +34,11 @@ const allowedChannels = ALLOWED_CHANNEL_IDS
 
 const allowedSavers = ALLOWED_SAVER_IDS
   ? ALLOWED_SAVER_IDS.split(',').map(s => s.trim()).filter(Boolean)
+  : [];
+
+// Users who can trigger AnimeshAI by tagging @Animesh in a channel
+const allowedResponders = ALLOWED_RESPONDER_IDS
+  ? ALLOWED_RESPONDER_IDS.split(',').map(s => s.trim()).filter(Boolean)
   : [];
 
 // ── Startup initialization ───────────────────────────────────────────────────
@@ -193,6 +201,27 @@ async function handleSaveCommand(text, userId, client, channel, ts, threadTs, bo
 }
 
 /**
+ * Sanitize LLM output for Slack's mrkdwn format.
+ * LLMs often emit standard Markdown which Slack doesn't render correctly.
+ */
+function sanitizeForSlack(text) {
+  return text
+    // Strip language identifier from code fences (```python → ```)
+    .replace(/^```[a-zA-Z][\w]*[ \t]*$/gm, '```')
+    // Convert **bold** → *bold*
+    .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
+    // Convert Markdown bullet `* item` → `- item` (with any indent)
+    .replace(/^(\s*)\* {1,3}/gm, '$1- ')
+    // Convert ## Heading → *Heading* (bold, no hash)
+    .replace(/^#{1,6} (.+)$/gm, '*$1*')
+    // Remove horizontal rules
+    .replace(/^[-*]{3,}$/gm, '')
+    // Collapse 3+ blank lines to 2
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
  * Fetch thread history and return Claude-compatible messages array.
  */
 async function fetchThreadHistory(client, channel, threadTs, botUserId, currentTs) {
@@ -236,7 +265,8 @@ async function handleAIResponse({ text, userId, channel, ts, threadTs, client, b
     : [];
 
   // Build system prompt with RAG context
-  const systemPrompt = buildSystemPrompt(cleanText);
+  const isOwner = userId === process.env.AUTHOR_SLACK_USER_ID;
+  const systemPrompt = buildSystemPrompt(cleanText, isOwner);
 
   const messages = [
     ...history,
@@ -253,7 +283,8 @@ async function handleAIResponse({ text, userId, channel, ts, threadTs, client, b
       ],
     });
 
-    const replyText = response.choices[0]?.message?.content || '(no response)';
+    const rawReply = response.choices[0]?.message?.content || '(no response)';
+    const replyText = sanitizeForSlack(rawReply);
 
     await client.chat.postMessage({
       channel,
@@ -267,6 +298,99 @@ async function handleAIResponse({ text, userId, channel, ts, threadTs, client, b
       thread_ts: ts,
       text: 'Sorry, something went wrong on my end. Try again in a moment.',
     });
+  }
+}
+
+/**
+ * Format the pending queue as a Slack message.
+ */
+function formatQueue() {
+  const pending = getPending();
+  if (pending.length === 0) return '✅ Queue is empty — all caught up.';
+
+  const lines = pending.map((item, i) => {
+    const link = `https://slack.com/archives/${item.channel}/p${item.ts.replace('.', '')}`;
+    const preview = item.text.slice(0, 80).replace(/\n/g, ' ');
+    const date = new Date(item.addedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+    return `${i + 1}. <${link}|View thread> — _${preview}…_ (${date})`;
+  });
+
+  return `*Review Queue — ${pending.length} pending*\n\n${lines.join('\n')}\n\n_Use \`@${BOT_NAME} queue done [n]\` to mark done · \`queue clear\` to remove all done_`;
+}
+
+/**
+ * Handle queue management commands. Returns true if handled.
+ */
+async function handleQueueCommand(text, userId, client, channel, ts) {
+  if (userId !== AUTHOR_SLACK_USER_ID) return false;
+
+  const lower = text.toLowerCase().trim();
+  if (!lower.startsWith('queue')) return false;
+
+  // "queue" or "queue list" — show pending
+  if (lower === 'queue' || lower === 'queue list') {
+    await client.chat.postMessage({ channel, thread_ts: ts, text: formatQueue() });
+    return true;
+  }
+
+  // "queue done [n]"
+  const doneMatch = lower.match(/^queue done (\d+)$/);
+  if (doneMatch) {
+    const item = markDone(parseInt(doneMatch[1], 10));
+    const msg = item
+      ? `✅ Marked item ${doneMatch[1]} as done.`
+      : `⚠️ No item at position ${doneMatch[1]}. Use \`queue\` to see the current list.`;
+    await client.chat.postMessage({ channel, thread_ts: ts, text: msg });
+    return true;
+  }
+
+  // "queue clear"
+  if (lower === 'queue clear') {
+    const removed = clearDone();
+    await client.chat.postMessage({ channel, thread_ts: ts, text: `🗑️ Cleared ${removed} completed item(s) from the queue.` });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Handle when someone tags Animesh (not the bot) in a channel.
+ * ACKs in thread and DMs Animesh with a link.
+ */
+async function handleOwnerMention({ message, client }) {
+  if (!AUTHOR_SLACK_USER_ID) return;
+  const { channel, ts, thread_ts, text, user } = message;
+
+  // Skip if sender is the owner themselves or a bot
+  if (user === AUTHOR_SLACK_USER_ID) return;
+  if (!text || !text.includes(`<@${AUTHOR_SLACK_USER_ID}>`)) return;
+
+  // Feature is disabled unless ALLOWED_RESPONDER_IDS is explicitly set
+  if (allowedResponders.length === 0) return;
+  if (!allowedResponders.includes(user)) return;
+
+  const threadTs = thread_ts || ts;
+  const position = addToQueue({ channel, ts: threadTs, text, fromUser: user });
+
+  // ACK in the thread
+  await client.chat.postMessage({
+    channel,
+    thread_ts: threadTs,
+    text: `👀 Noted — added to ${AUTHOR_NAME}'s review queue (#${position})`,
+  });
+
+  // DM the owner
+  try {
+    const dm = await client.conversations.open({ users: AUTHOR_SLACK_USER_ID });
+    const link = `https://slack.com/archives/${channel}/p${threadTs.replace('.', '')}`;
+    const preview = (text || '').slice(0, 200).replace(new RegExp(`<@${AUTHOR_SLACK_USER_ID}>`, 'g'), `@${AUTHOR_NAME}`);
+    await client.chat.postMessage({
+      channel: dm.channel.id,
+      text: `*Review queue #${position}* — <#${channel}>\n<${link}|Open thread>\n> ${preview}`,
+    });
+  } catch (err) {
+    console.error('[queue] Failed to DM owner:', err.message);
   }
 }
 
@@ -288,15 +412,26 @@ slackApp.event('app_mention', async ({ event, client, context }) => {
   });
 });
 
-// ── Event: message (DMs only) ────────────────────────────────────────────────
+// ── Event: message ───────────────────────────────────────────────────────────
 
 slackApp.message(async ({ message, client, context }) => {
-  // Only handle direct messages
-  if (message.channel_type !== 'im') return;
   // Ignore bot messages (including self)
   if (message.subtype === 'bot_message' || message.bot_id) return;
 
-  const { channel, ts, thread_ts, text, user } = message;
+  const { channel, ts, thread_ts, text, user, channel_type } = message;
+
+  // In channels: check if @Animesh (the owner) was mentioned
+  if (channel_type !== 'im' && AUTHOR_SLACK_USER_ID && text?.includes(`<@${AUTHOR_SLACK_USER_ID}>`)) {
+    await handleOwnerMention({ message, client });
+    return;
+  }
+
+  // Only handle direct messages to the bot below this point
+  if (channel_type !== 'im') return;
+
+  // Queue commands (owner only, via DM)
+  const wasQueue = await handleQueueCommand(text || '', user, client, channel, ts);
+  if (wasQueue) return;
 
   await handleAIResponse({
     text: text || '',

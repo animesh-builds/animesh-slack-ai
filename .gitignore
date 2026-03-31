@@ -3,6 +3,9 @@ node_modules/
 *.log
 .DS_Store
 
+# Queue state — local only
+data/review-queue.json
+
 # Private knowledge — generated from local private repos, never commit
 data/private-knowledge.md
 data/learnings.md
